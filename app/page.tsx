@@ -26,6 +26,7 @@ interface AnalysisResult {
 export default function Home() {
   const [image, setImage] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [progress, setProgress] = useState(0); // রিয়েল-টাইম প্রোগ্রেস পার্সেন্টেজ স্টেট
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [result, setResult] = useState<AnalysisResult | null>(null);
 
@@ -37,15 +38,17 @@ export default function Home() {
     if (!file) return;
 
     setLoading(true);
+    setProgress(15); // প্রসেসিং শুরু
 
-    // Image compression for lightning-fast upload & processing (< 5-7s)
+    // Image compression for lightning-fast upload & processing
     const reader = new FileReader();
     reader.onload = (event) => {
+      setProgress(40); // ফাইল রিড সম্পন্ন
       const img = new Image();
       img.src = event.target?.result as string;
       img.onload = () => {
         const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 600; // Speed optimizationer jonno 600 kora holo
+        const MAX_WIDTH = 600; 
         const MAX_HEIGHT = 600;
         let width = img.width;
         let height = img.height;
@@ -70,12 +73,15 @@ export default function Home() {
         // Convert to compressed base64 JPEG (Quality 0.7 for max speed)
         const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
         setImage(compressedBase64);
+        
+        setProgress(70); // কম্প্রেশন শেষ, এআই এপিআই কল হচ্ছে
         analyzeFood(compressedBase64);
       };
     };
 
     reader.onerror = () => {
       setLoading(false);
+      setProgress(0);
       setErrorMsg('Failed to read image file.');
     };
 
@@ -93,15 +99,21 @@ export default function Home() {
       const data = await res.json();
 
       if (res.ok) {
-        setResult(data);
+        setProgress(100); // সফলভাবে এনালাইসিস শেষ
+        setTimeout(() => {
+          setResult(data);
+          setLoading(false);
+        }, 300); // স্মুথ ট্রানজিশনের জন্য সামান্য ডিলে
       } else {
+        setLoading(false);
+        setProgress(0);
         setErrorMsg(data.error || 'AI analysis failed.');
       }
     } catch (err) {
       console.error(err);
-      setErrorMsg('Network error. Could not connect.');
-    } finally {
       setLoading(false);
+      setProgress(0);
+      setErrorMsg('Network error. Could not connect.');
     }
   };
 
@@ -155,10 +167,21 @@ export default function Home() {
               </div>
             </div>
 
+            {/* রিয়েল-টাইম প্রোগ্রেস বার ও পার্সেন্টেজ শো করার ওভারলে */}
             {loading && (
-              <div className="absolute inset-0 bg-slate-900/95 backdrop-blur-sm flex flex-col items-center justify-center gap-3 z-20">
-                <div className="w-10 h-10 rounded-full border-3 border-emerald-500/20 border-t-emerald-500 animate-spin"></div>
-                <p className="text-xs font-bold text-emerald-400 tracking-wide animate-pulse">Analyzing food items...</p>
+              <div className="absolute inset-0 bg-slate-900/95 backdrop-blur-sm flex flex-col items-center justify-center gap-4 z-20 px-6">
+                <div className="w-12 h-12 rounded-full border-4 border-emerald-500/20 border-t-emerald-500 animate-spin"></div>
+                <div className="w-full text-center">
+                  <p className="text-xs font-bold text-emerald-400 tracking-wide mb-2 animate-pulse">
+                    Analyzing food items... {progress}%
+                  </p>
+                  <div className="w-full bg-slate-800 h-2.5 rounded-full overflow-hidden p-0.5">
+                    <div 
+                      className="bg-emerald-500 h-full rounded-full transition-all duration-300"
+                      style={{ width: `${progress}%` }}
+                    ></div>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -205,7 +228,7 @@ export default function Home() {
                 <h2 className="text-lg font-black text-white mt-1">{result.foodTitle}</h2>
               </div>
               <button 
-                onClick={() => { setResult(null); setImage(null); setErrorMsg(null); }}
+                onClick={() => { setResult(null); setImage(null); setErrorMsg(null); setProgress(0); }}
                 className="bg-slate-800 hover:bg-slate-700 p-2.5 rounded-xl text-slate-300 transition-colors shadow-sm"
                 title="Scan another meal"
               >
@@ -263,7 +286,7 @@ export default function Home() {
                         <span className="text-emerald-400 font-semibold">P: {item.protein}g</span>
                         <span className="text-amber-400 font-semibold">C: {item.carbs}g</span>
                         <span className="text-rose-400 font-semibold">F: {item.fat}g</span>
-                        <span className="text-slate-500">• {item.weightGrams}g</span>
+                        <span className="text-slate-500">{item.weightGrams}g</span>
                       </div>
                     </div>
                     <div className="text-right shrink-0">
@@ -282,7 +305,7 @@ export default function Home() {
       {/* Bottom Footer Slogan */}
       <div className="py-2 text-center">
         <p className="text-xs font-medium text-emerald-500/70 tracking-wider">
-          Track Eat Stay Healthy 🤍
+          Track Your Meals, Eat Smart, Stay Healthy 🤍
         </p>
       </div>
 

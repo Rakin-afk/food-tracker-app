@@ -1,4 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { Redis } from '@upstash/redis';
+
+// Upstash Redis ইনিশিয়ালাইজ করা (সার্ভারলেস স্টেট ধরে রাখার জন্য)
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL!,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN!,
+});
 
 const apiKeys = [
   process.env.GEMINI_API_KEY_1,
@@ -13,15 +20,16 @@ const apiKeys = [
   process.env.GEMINI_API_KEY_10,
 ].filter(Boolean) as string[];
 
-let currentKeyIndex = 0;
-
-function getNextApiKey(): string {
+// রেডিস ব্যবহার করে অ্যাটমিক রাউন্ড-রবিন কি রোটেশন
+async function getNextApiKey(): Promise<string> {
   if (apiKeys.length === 0) {
     throw new Error("No API keys configured in environment variables.");
   }
-  const key = apiKeys[currentKeyIndex];
-  currentKeyIndex = (currentKeyIndex + 1) % apiKeys.length;
-  return key;
+  
+  const counter = await redis.incr('global_api_key_counter');
+  const currentKeyIndex = (counter - 1) % apiKeys.length;
+  
+  return apiKeys[currentKeyIndex];
 }
 
 export async function POST(req: NextRequest) {
@@ -32,34 +40,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No image provided' }, { status: 400 });
     }
 
-    const apiKey = getNextApiKey();
+    // রেডিস থেকে এপিআই কি ফেচ করার জন্য await ব্যবহার করা হয়েছে
+    const apiKey = await getNextApiKey();
 
     const base64Data = image.split(',')[1] || image;
     const mimeType = image.split(';')[0].split(':')[1] || 'image/jpeg';
 
-    const prompt = `Analyze this food image completely and thoroughly. Identify EVERY SINGLE individual food item and dish visible in the image (such as different types of sushi, rolls, dumplings, fried dishes, side items, etc.). 
-    Estimate the realistic total calories, protein, carbs, and fat for the entire meal, and provide a detailed breakdown for EACH individual item with its specific name, description, calories, protein, carbs, fat, weight in grams, and servings. Do not skip any item.
-
-    Return ONLY a valid JSON object matching this exact schema. Do not use double quotes inside string values (use single quotes ' if needed):
-    {
-      "foodTitle": "Name of the meal spread",
-      "totalCalories": 1500,
-      "totalProtein": 70,
-      "totalCarbs": 180,
-      "totalFat": 50,
-      "items": [
-        {
-          "name": "Exact item name",
-          "description": "Brief description",
-          "calories": 250,
-          "protein": 12,
-          "carbs": 30,
-          "fat": 8,
-          "weightGrams": 150,
-          "servings": 1
-        }
-      ]
-    }`;
+    const prompt = `Analyze this food image completely and thoroughly. Identify EVERY SINGLE individual food item and dish visible in the image. 
+    Estimate the realistic total calories, protein, carbs, and fat for the entire meal, and provide a detailed breakdown for EACH individual item with its specific name, description, calories, protein, carbs, fat, weight in grams, and servings. Do not skip any item. Do not assume or hallucinate ingredients that are not clearly visible.`;
 
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
@@ -83,9 +71,38 @@ export async function POST(req: NextRequest) {
             }
           ],
           generationConfig: {
-            temperature: 0.2,
+            temperature: 0.0, // হ্যালুসিনেশন ও জেসন ভেঙে যাওয়া রোধ করার জন্য জিরো টেম্পারেচার
             maxOutputTokens: 4096,
-            responseMimeType: "application/json"
+            responseMimeType: "application/json",
+            // জেসন পার্সিং এরর চিরতরে দূর করতে কঠোর স্কিমা ডিফাইন করা হলো
+            responseSchema: {
+              type: "OBJECT",
+              properties: {
+                foodTitle: { type: "STRING" },
+                totalCalories: { type: "NUMBER" },
+                totalProtein: { type: "NUMBER" },
+                totalCarbs: { type: "NUMBER" },
+                totalFat: { type: "NUMBER" },
+                items: {
+                  type: "ARRAY",
+                  items: {
+                    type: "OBJECT",
+                    properties: {
+                      name: { type: "STRING" },
+                      description: { type: "STRING" },
+                      calories: { type: "NUMBER" },
+                      protein: { type: "NUMBER" },
+                      carbs: { type: "NUMBER" },
+                      fat: { type: "NUMBER" },
+                      weightGrams: { type: "NUMBER" },
+                      servings: { type: "NUMBER" }
+                    },
+                    required: ["name", "description", "calories", "protein", "carbs", "fat", "weightGrams", "servings"]
+                  }
+                }
+              },
+              required: ["foodTitle", "totalCalories", "totalProtein", "totalCarbs", "totalFat", "items"]
+            }
           }
         })
       }
